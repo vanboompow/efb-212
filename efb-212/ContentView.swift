@@ -4,9 +4,10 @@
 //
 //  Root view — TabView with 5 main app tabs.
 //  Map tab shows the full moving map with instrument strip and layer controls.
+//  Flights tab shows flight history with manual entry.
+//  Logbook tab shows traditional pilot logbook format.
 //  Aircraft tab shows pilot and aircraft profile management.
 //  Settings tab shows app settings and chart management.
-//  Flights and Logbook tabs are placeholders until Wave 3.
 //
 
 import SwiftUI
@@ -19,6 +20,11 @@ struct ContentView: View {
     @State private var mapService = MapService()
     @State private var mapViewModel: MapViewModel?
 
+    // Flight planning
+    @State private var flightPlanViewModel: FlightPlanViewModel?
+    @State private var weatherViewModel: WeatherViewModel?
+    @State private var showFlightPlan: Bool = false
+
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab(AppTab.map.title, systemImage: AppTab.map.systemImage, value: .map) {
@@ -27,19 +33,13 @@ struct ContentView: View {
 
             Tab(AppTab.flights.title, systemImage: AppTab.flights.systemImage, value: .flights) {
                 NavigationStack {
-                    Text("Flights")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                        .navigationTitle("Flights")
+                    FlightListView()
                 }
             }
 
             Tab(AppTab.logbook.title, systemImage: AppTab.logbook.systemImage, value: .logbook) {
                 NavigationStack {
-                    Text("Logbook")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                        .navigationTitle("Logbook")
+                    LogbookView()
                 }
             }
 
@@ -60,11 +60,41 @@ struct ContentView: View {
                     mapService: mapService
                 )
             }
+            if flightPlanViewModel == nil {
+                flightPlanViewModel = FlightPlanViewModel(
+                    databaseManager: appState.databaseManager
+                )
+            }
+            if weatherViewModel == nil {
+                weatherViewModel = WeatherViewModel(
+                    weatherService: appState.weatherService
+                )
+            }
         }
         .sheet(isPresented: $appState.isPresentingAirportInfo) {
             if let airportID = appState.selectedAirportID,
                let airport = mapViewModel?.selectedAirport, airport.icao == airportID {
-                AirportInfoSheet(airport: airport, weather: nil)
+                let weather = weatherViewModel?.weatherData[airportID]
+                AirportInfoSheet(airport: airport, weather: weather)
+            }
+        }
+        .sheet(isPresented: $showFlightPlan) {
+            if let fpvm = flightPlanViewModel, let wvm = weatherViewModel {
+                FlightPlanView(viewModel: fpvm, weatherViewModel: wvm)
+            }
+        }
+        .onChange(of: flightPlanViewModel?.activePlan) {
+            // Sync flight plan to AppState for InstrumentStrip DTG/ETE
+            appState.activeFlightPlan = flightPlanViewModel?.activePlan
+            if let plan = flightPlanViewModel?.activePlan {
+                appState.distanceToNext = plan.totalDistance
+                appState.estimatedTimeEnroute = plan.estimatedTime
+                // Render route line on map
+                mapService.showRoute(waypoints: plan.waypoints)
+            } else {
+                appState.distanceToNext = nil
+                appState.estimatedTimeEnroute = nil
+                mapService.clearRoute()
             }
         }
     }
@@ -78,10 +108,25 @@ struct ContentView: View {
             MapView(mapService: mapService)
                 .ignoresSafeArea(edges: .top)
 
-            // Floating layer controls (top-right)
+            // Floating controls
             VStack {
                 HStack {
+                    // Flight plan button (top-left)
+                    Button {
+                        showFlightPlan = true
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                            .font(.title3)
+                            .padding(10)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 16)
+                    .padding(.top, 60)
+
                     Spacer()
+
+                    // Layer controls (top-right)
                     LayerControlsView(mapService: mapService)
                         .padding(.trailing, 16)
                         .padding(.top, 60)
